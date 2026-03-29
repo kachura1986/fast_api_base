@@ -3,7 +3,7 @@ from functools import wraps
 
 from tenacity import after_log, before_sleep_log, retry, stop_after_attempt, wait_exponential
 
-from src.dependencies import get_logger
+from dependencies import get_logger
 
 # Initialize logging
 logger = get_logger()

@@ -1,12 +1,28 @@
 import uvicorn
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
-from src.api.routers import main_router
-from src.core.config import settings
-from src.core.error_handler import ErrorHandler
-from src.dependencies import get_logger
+from api.routers import main_router
+from core.config import settings
+from core.error_handler import ErrorHandler
+from dependencies import get_logger
 
 logger = get_logger()
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """
+    Asynchronous context manager for managing the application lifecycle.
+    Ensures that setup and cleanup occur only within the worker process.
+    """
+    logger.info(f"Starting {settings.app_title} server...")
+
+    ErrorHandler(app, logger)
+
+    yield
+
+    logger.info("Shutting down FastAPI server...")
 
 
 def init_app() -> FastAPI:
@@ -16,16 +32,8 @@ def init_app() -> FastAPI:
     Returns:
         FastAPI: Configured FastAPI application instance.
     """
-    # Pass lifespan handler to FastAPI constructor
-    app = FastAPI(title=settings.app_title, description=settings.description)
+    app = FastAPI(title=settings.app_title, description=settings.description, lifespan=lifespan)
 
-    # Logging
-    logger.info("Starting FastAPI server...")
-
-    # Initialize error handler
-    ErrorHandler(app, logger)
-
-    # Add routers and apply necessary configurations
     app.include_router(main_router)
 
     return app
@@ -34,4 +42,9 @@ def init_app() -> FastAPI:
 app = init_app()
 
 if __name__ == '__main__':
-    uvicorn.run(app, host=settings.host, port=settings.port, log_config=None)
+    uvicorn.run(
+        "main:app",
+        host=settings.host,
+        port=settings.port,
+        log_config=None
+    )

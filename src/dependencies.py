@@ -1,6 +1,6 @@
 import logging
 
-from src.core.logger import setup_logging
+from core.logger import setup_logging
 
 # --- Logging ---
 _logger = setup_logging('app.log')

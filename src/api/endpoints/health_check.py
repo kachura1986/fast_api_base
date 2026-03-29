@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends
 
-from src.core.config import settings
-from src.dependencies import get_logger
+from core.config import settings
+from dependencies import get_logger
 
 router = APIRouter()
 
