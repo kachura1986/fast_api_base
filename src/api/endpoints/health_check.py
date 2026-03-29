@@ -1,9 +1,8 @@
 from fastapi import APIRouter, Depends
 
+from api.schemas.health_check import HealthResponse
 from core.config import settings
 from dependencies import get_logger
-
-from api.schemas.health_check import HealthResponse
 
 router = APIRouter()
 

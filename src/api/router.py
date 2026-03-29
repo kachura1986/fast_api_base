@@ -6,8 +6,8 @@ main_router = APIRouter(prefix="/api")
 
 # Define routers
 routers = [
-    (health_check.router, "/health_check", ["Health"]),
+    (health_check.router, "/health_check", "Health"),
 ]
 
-for router, prefix, tags in routers:
-    main_router.include_router(router, prefix=prefix, tags=tags)
+for router, prefix, tag in routers:
+    main_router.include_router(router, prefix=prefix, tags=[tag])
