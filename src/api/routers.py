@@ -1,6 +1,7 @@
 from fastapi import APIRouter
 
 from .endpoints import health_check
+
 main_router = APIRouter(prefix="/api")
 
 # Define routers
