@@ -1,0 +1,40 @@
+[project]
+name = "fast-api"
+version = "0.1.0"
+description = "FastAPI"
+readme = "README.md"
+requires-python = ">=3.12"
+
+dependencies = [
+    # API dependencies
+    "fastapi==0.135.2",
+    "pydantic-settings==2.13.1",
+    "tenacity==9.1.4",
+    "uvicorn==0.42.0",
+]
+
+[dependency-groups]
+lint = [
+    "ruff",
+    "mypy",
+]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "UP"]
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]
+
+[tool.mypy]
+python_version = "3.12"
+ignore_missing_imports = true
+show_error_codes = true
+pretty = true
+follow_imports = "silent"
+warn_unused_ignores = true
+check_untyped_defs = true
