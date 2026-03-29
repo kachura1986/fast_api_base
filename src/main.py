@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 import uvicorn
 from fastapi import FastAPI
 
-from api.routers import main_router
+from api.router import main_router
 from core.config import settings
 from core.error_handler import ErrorHandler
 from dependencies import get_logger
