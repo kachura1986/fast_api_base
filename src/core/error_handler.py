@@ -1,3 +1,4 @@
+import logging
 import traceback
 from collections.abc import Sequence
 
@@ -12,7 +13,7 @@ class ErrorHandler:
     Centralized error handler for FastAPI that provides informative and consistent error responses.
     """
 
-    def __init__(self, app: FastAPI, logger) -> None:
+    def __init__(self, app: FastAPI, logger: logging.Logger) -> None:
         """
         Initializes the ErrorHandler and registers error handlers.
 
@@ -20,8 +21,8 @@ class ErrorHandler:
             app: FastAPI application instance.
             logger: Logger instance used to record error details.
         """
-        self._register_error_handlers(app)
         self._logger = logger
+        self._register_error_handlers(app)
 
     @staticmethod
     def _error_response(
@@ -137,10 +138,9 @@ class ErrorHandler:
 
             response = self._error_response(
                 request=request,
-                error_type='PydanticValidationError',
-                message='Internal server data validation error',
+                error_type='InternalServerError',
+                message='Internal server error occurred',
                 http_status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                details=exc.errors(),
             )
 
             return response
@@ -185,10 +185,9 @@ class ErrorHandler:
 
             response = self._error_response(
                 request=request,
-                error_type=exc.__class__.__name__,
+                error_type='InternalServerError',
                 message='Internal server error occurred',
                 http_status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                details={'traceback': traceback_str.splitlines()[-5:]},
             )
 
             return response
