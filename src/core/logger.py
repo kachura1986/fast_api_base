@@ -47,7 +47,7 @@ def setup_logging(log_filename: str = 'app.log') -> logging.Logger:
     logger.addHandler(file_handler)
     logger.addHandler(console_handler)
 
-    logging.getLogger('app.utils.some_module').setLevel(logging.WARNING)
+    logger.propagate = False
 
     logger.info(f"Logging setup complete. Logs are stored in {log_file}")
 

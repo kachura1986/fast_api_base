@@ -5,6 +5,7 @@ from core.logger import setup_logging
 _logger: logging.Logger | None = None
 
 
+# --- Dependency Providers ---
 def get_logger() -> logging.Logger:
     global _logger
 
