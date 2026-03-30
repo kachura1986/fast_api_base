@@ -1,15 +1,10 @@
 import logging
+from functools import lru_cache
 
 from core.logger import setup_logging
 
-_logger: logging.Logger | None = None
-
 
 # --- Dependency Providers ---
+@lru_cache()
 def get_logger() -> logging.Logger:
-    global _logger
-
-    if _logger is None:
-        _logger = setup_logging('app.log')
-
-    return _logger
+    return setup_logging('app.log')
