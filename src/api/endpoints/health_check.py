@@ -1,3 +1,4 @@
+import logging
 from fastapi import APIRouter, Depends
 
 from api.schemas.health_check import HealthResponse
@@ -8,7 +9,7 @@ router = APIRouter()
 
 
 @router.get('', response_model=HealthResponse)
-async def health_check(logger=Depends(get_logger)) -> HealthResponse:
+async def health_check(logger: logging.Logger = Depends(get_logger)) -> HealthResponse:
     """Check that the API is running and ready to receive requests.
 
     Args:
