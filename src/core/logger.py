@@ -3,7 +3,7 @@ import os
 from logging.handlers import TimedRotatingFileHandler
 
 
-def setup_logging(log_filename='app.log'):
+def setup_logging(log_filename: str = 'app.log') -> logging.Logger:
     """
     Configures the logging system for the application.
 
@@ -17,20 +17,35 @@ def setup_logging(log_filename='app.log'):
     Returns:
         logging.Logger: Configured logger instance.
     """
+    logger = logging.getLogger()
+
+    # Prevent duplicate handlers during reload
+    if logger.handlers:
+        return logger
+
     log_dir = os.path.join(os.getcwd(), '.temp/logs')
     os.makedirs(log_dir, exist_ok=True)
 
     log_file = os.path.join(log_dir, log_filename)
 
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+
     # Create rotating file handler
-    file_handler = TimedRotatingFileHandler(log_file, when='midnight', interval=1, backupCount=7)
-    file_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+    file_handler = TimedRotatingFileHandler(
+        filename=log_file,
+        when='midnight',
+        interval=1,
+        backupCount=7
+    )
+    file_handler.setFormatter(formatter)
+
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(formatter)
 
     # Configure logging
-    logger = logging.getLogger()
     logger.setLevel(logging.INFO)
     logger.addHandler(file_handler)
-    logger.addHandler(logging.StreamHandler())
+    logger.addHandler(console_handler)
 
     logging.getLogger('app.utils.some_module').setLevel(logging.WARNING)
 
