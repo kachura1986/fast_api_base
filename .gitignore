@@ -1,6 +1,7 @@
 # Ignore virtual environments and IDE-related files
 .venv
 .idea
+.vscode
 
 # Ignore version control system files
 .git
