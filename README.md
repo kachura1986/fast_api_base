@@ -6,7 +6,7 @@
 
 ## ✨ Features
 
-* 🐍 Python 3.12+
+* 🐍 Python 3.13+
 * ⚡ FastAPI + async ready
 * 📦 Modern `pyproject.toml`
 * 🧠 Typed (mypy)
@@ -61,16 +61,37 @@ uv run mypy .
 
 ```
 .
-├── app/
-│   ├── main.py
-│   ├── config.py
-│   ├── api/
-│   ├── dependencies.py
-│   └── schemas.py
-│
-├── tests/
+├── .dockerignore
+├── .env
+├── .env.example
+├── .gitignore
+├── .python-version
+├── Dockerfile
+├── README.md
+├── docker-compose.yml
 ├── pyproject.toml
-└── README.md
+├── src
+│   ├── __init__.py
+│   ├── api
+│   │   ├── __init__.py
+│   │   ├── endpoints
+│   │   │   ├── __init__.py
+│   │   │   └── health_check.py
+│   │   ├── router.py
+│   │   └── schemas
+│   │       ├── __init__.py
+│   │       └── health_check.py
+│   ├── core
+│   │   ├── __init__.py
+│   │   ├── config.py
+│   │   ├── error_handler.py
+│   │   ├── logger.py
+│   │   └── retry_strategy.py
+│   ├── dependencies.py
+│   ├── main.py
+│   └── services
+│       └── __init__.py
+└── uv.lock
 ```
 
 ---
@@ -81,7 +102,6 @@ Create `.env` file:
 
 ```
 APP_NAME=FastAPI Service
-DEBUG=true
 ```
 
 ---
