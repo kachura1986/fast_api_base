@@ -8,10 +8,10 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(extra='ignore')
 
     # Application settings
-    app_title: str = "FastAPI"
-    description: str = "The FastAPI application."
-    host: str = '127.0.0.1'
-    port: int = 8000
+    APP_TITLE: str = "FastAPI"
+    DESCRIPTION: str = "The FastAPI application."
+    HOST: str = '127.0.0.1'
+    PORT: int = 8000
 
 
 settings = Settings()

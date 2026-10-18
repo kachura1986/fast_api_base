@@ -16,7 +16,7 @@ async def lifespan(app: FastAPI):
     Ensures that setup and cleanup occur only within the worker process.
     """
     logger = get_logger()
-    logger.info(f"Starting {settings.app_title} server...")
+    logger.info(f"Starting {settings.APP_TITLE} server...")
 
     ErrorHandler(app, logger)
 
@@ -33,8 +33,8 @@ def init_app() -> FastAPI:
         FastAPI: Configured FastAPI application instance.
     """
     app = FastAPI(
-        title=settings.app_title,
-        description=settings.description,
+        title=settings.APP_TITLE,
+        description=settings.DESCRIPTION,
         lifespan=lifespan,
     )
 
@@ -48,7 +48,7 @@ app = init_app()
 if __name__ == '__main__':
     uvicorn.run(
         app='main:app',
-        host=settings.host,
-        port=settings.port,
+        host=settings.HOST,
+        port=settings.PORT,
         log_config=None,
     )
