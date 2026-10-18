@@ -14,7 +14,7 @@
 *.pyd
 
 # Ignore logs and temporary files
-tools
+tools_
 .temp
 *.log
 *.tmp
