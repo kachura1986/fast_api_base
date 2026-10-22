@@ -6,7 +6,7 @@ from fastapi import FastAPI
 from api.router import main_router
 from core.config import settings
 from core.error_handler import ErrorHandler
-from dependencies import get_logger
+from dependencies import PipelineDependencies, get_logger
 
 
 @asynccontextmanager
@@ -16,13 +16,22 @@ async def lifespan(app: FastAPI):
     Ensures that setup and cleanup occur only within the worker process.
     """
     logger = get_logger()
-    logger.info(f"Starting {settings.APP_TITLE} server...")
+    logger.info("Starting %s server...", settings.APP_TITLE)
 
-    ErrorHandler(app, logger)
+    dependencies = await PipelineDependencies.create()
+    app.state.dependencies = dependencies
 
-    yield
+    try:
+        logger.info("Application startup completed.")
 
-    logger.info("Shutting down FastAPI server...")
+        yield
+
+    finally:
+        logger.info("Shutting down FastAPI server...")
+
+        await dependencies.close()
+
+        logger.info("Application shutdown completed.")
 
 
 def init_app() -> FastAPI:
@@ -37,6 +46,8 @@ def init_app() -> FastAPI:
         description=settings.DESCRIPTION,
         lifespan=lifespan,
     )
+
+    ErrorHandler(app, get_logger())
 
     app.include_router(main_router)
 
