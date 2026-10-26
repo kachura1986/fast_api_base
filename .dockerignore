@@ -14,10 +14,12 @@
 *.pyd
 
 # Ignore logs and temporary files
-tools_
-.temp
-*.log
-*.tmp
+**/.temp/
+**/.logs/
+**/*.log
+**/*.tmp
+**/.runs/
 
 # Exclude local configuration files
 .env
+
