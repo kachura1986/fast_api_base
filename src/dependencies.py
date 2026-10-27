@@ -5,13 +5,13 @@ from functools import lru_cache
 from fastapi import Request
 
 from core.logger import setup_logging
-# from core.config import settings
+from core.config import settings
 
 
 # Logger
 @lru_cache()
 def get_logger() -> logging.Logger:
-    return setup_logging('app.log')
+    return setup_logging(settings.LOGS_DIR / 'app.log')
 
 
 # DI container
