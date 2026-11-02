@@ -13,12 +13,13 @@ from core.config import settings
 
 # Fields allowed to pass through extra=... into JSON
 _EXTRA_WHITELIST: tuple[str, ...] = (
-    'run_id',
-    'step',
-    'tool',
-    'error_code',
-    'latency_ms',
-    'log_file',
+    # Example
+    # 'run_id',
+    # 'step',
+    # 'tool',
+    # 'error_code',
+    # 'latency_ms',
+    # 'log_file',
 )
 
 # Base JSON event fields (never dropped)
