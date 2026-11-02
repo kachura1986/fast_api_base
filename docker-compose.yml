@@ -1,3 +1,5 @@
+name: fast_api_base
+
 services:
   app:
     build: .
