@@ -1,3 +1,5 @@
+import logging
+
 from contextlib import asynccontextmanager
 
 import uvicorn
@@ -6,7 +8,13 @@ from fastapi import FastAPI
 from api.router import main_router
 from core.config import settings
 from core.error_handler import ErrorHandler
-from dependencies import PipelineDependencies, get_logger
+from core.logger import get_logger
+from dependencies import PipelineDependencies
+
+# Set up logging handlers before first log record
+get_logger()
+
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -15,8 +23,7 @@ async def lifespan(app: FastAPI):
     Asynchronous context manager for managing the application lifecycle.
     Ensures that setup and cleanup occur only within the worker process.
     """
-    logger = get_logger()
-    logger.info("Starting %s server...", settings.APP_TITLE)
+    logger.info(f"Starting {settings.APP_TITLE} server...")
 
     dependencies = await PipelineDependencies.create()
     app.state.dependencies = dependencies
@@ -47,7 +54,7 @@ def init_app() -> FastAPI:
         lifespan=lifespan,
     )
 
-    ErrorHandler(app, get_logger())
+    ErrorHandler(app, logging.getLogger(ErrorHandler.__module__))
 
     app.include_router(main_router)
 
@@ -58,7 +65,7 @@ app = init_app()
 
 if __name__ == '__main__':
     uvicorn.run(
-        app='main:app',
+        app=app,
         host=settings.HOST,
         port=settings.PORT,
         log_config=None,

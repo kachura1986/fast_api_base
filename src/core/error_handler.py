@@ -37,7 +37,7 @@ class ErrorHandler:
             request (Request): FastAPI request object.
             error_type (str): Type of the error (e.g. "ValidationError").
             message (str): Main error message.
-            http_status (str): HTTP status code.
+            http_status (int): HTTP status code.
             details (dict | Sequence | None, optional): Optional detailed error information.
 
         Returns:
@@ -82,7 +82,10 @@ class ErrorHandler:
             Returns:
                 JSONResponse: JSON response describing the HTTP error.
             """
-            self._logger.warning(f"HTTP error at {request.url.path}: {exc.detail}")
+            self._logger.warning(
+                f"HTTP error at {request.url.path}: {exc.detail}",
+                extra={'error_code': 'http_exception'},
+            )
 
             response = self._error_response(
                 request=request,
@@ -106,13 +109,16 @@ class ErrorHandler:
             Returns:
                 JSONResponse: JSON response describing the client-side validation error (422).
             """
-            self._logger.warning(f"Request validation error for {request.url}: {exc.errors()}")
+            self._logger.warning(
+                f"Request validation error for {request.url}: {exc.errors()}",
+                extra={'error_code': 'request_validation_error'},
+            )
 
             response = self._error_response(
                 request=request,
                 error_type='RequestValidationError',
                 message='Invalid input data in request',
-                http_status=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                http_status=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 details=exc.errors(),
             )
 
@@ -131,7 +137,10 @@ class ErrorHandler:
             Returns:
                 JSONResponse: JSON response describing the internal server error (500).
             """
-            self._logger.error(f"Internal Pydantic validation error: {exc.errors()}\n{traceback.format_exc()}")
+            self._logger.error(
+                f"Internal Pydantic validation error: {exc.errors()}\n{traceback.format_exc()}",
+                extra={'error_code': 'pydantic_validation_error'},
+            )
 
             response = self._error_response(
                 request=request,
@@ -154,7 +163,10 @@ class ErrorHandler:
             Returns:
                 JSONResponse: JSON response describing the value error.
             """
-            self._logger.warning(f"Value error: {exc}")
+            self._logger.warning(
+                f"Value error: {exc}",
+                extra={'error_code': 'value_error'},
+            )
 
             response = self._error_response(
                 request=request,
@@ -178,7 +190,10 @@ class ErrorHandler:
                 JSONResponse: JSON response describing the internal server error.
             """
             traceback_str = ''.join(traceback.format_exception(type(exc), exc, exc.__traceback__))
-            self._logger.error(f"Unhandled exception at {request.url.path}: {exc}\n{traceback_str}")
+            self._logger.error(
+                f"Unhandled exception at {request.url.path}: {exc}\n{traceback_str}",
+                extra={'error_code': 'unhandled_exception'},
+            )
 
             response = self._error_response(
                 request=request,
