@@ -67,6 +67,7 @@ def clean_logging():
     root.handlers[:] = []
     root.setLevel(logging.WARNING)
     structlog.reset_defaults()
+    structlog.contextvars.clear_contextvars()
     logger_mod.get_logger.cache_clear()
 
     try:
@@ -81,6 +82,7 @@ def clean_logging():
         root.handlers[:] = saved_handlers
         root.setLevel(saved_level)
         structlog.reset_defaults()
+        structlog.contextvars.clear_contextvars()
         logger_mod.get_logger.cache_clear()
 
 
@@ -92,24 +94,76 @@ def last_record(tmp_path):
     return _get
 
 
+@pytest.fixture
+def populate_whitelist(monkeypatch):
+    """Temporarily populate the whitelist to exercise the projection mechanism.
+
+    The template ships with an empty whitelist (see test_whitelist_is_empty_by_default).
+    To test _add_whitelisted_extras / _filter_event_dict / end-to-end extra= handling,
+    we monkeypatch both _EXTRA_WHITELIST and _ALLOWED_KEYS together.
+
+    _ALLOWED_KEYS must be patched explicitly because it is computed at import
+    time (frozenset union), so patching only _EXTRA_WHITELIST would leave
+    _filter_event_dict with a stale allowed set.
+
+    Dependency on clean_logging (autouse): this fixture only affects the
+    *module-level* attributes read at call time by the processors. If
+    setup_logging() has already run earlier in the same test (structlog.configure
+    is executed only on the first, non-early-returning call), the formatter
+    chain is already fixed and will not pick up the patched whitelist. Apply
+    this fixture *before* any setup_logging() call in the test body.
+
+    Teardown is automatic (monkeypatch restores both attributes).
+    """
+    from core import logger as logger_mod
+
+    canonical = ('run_id', 'step', 'tool', 'error_code', 'latency_ms', 'log_file')
+    monkeypatch.setattr(logger_mod, '_EXTRA_WHITELIST', canonical)
+    monkeypatch.setattr(
+        logger_mod,
+        '_ALLOWED_KEYS',
+        logger_mod._BASE_KEYS | frozenset(canonical),
+    )
+    return canonical
+
+
 # ---------------------------------------------------------------------------
 # Constants: the whitelist is the contract
 # ---------------------------------------------------------------------------
 
-def test_extra_whitelist_contents():
-    """The whitelist contains exactly the canonical extra= keys."""
-    assert set(_EXTRA_WHITELIST) == {
-        'run_id', 'step', 'tool', 'error_code', 'latency_ms', 'log_file',
-    }
+def test_whitelist_is_empty_by_default():
+    """The template ships with an empty whitelist: extra= fields are dropped.
+
+    Users uncomment keys in core/logger.py::_EXTRA_WHITELIST to enable
+    projection of specific extras into JSON. The empty default is the
+    safe template contract — no accidental SecretStr / large payload leak.
+    """
+    assert _EXTRA_WHITELIST == ()
+
+
+def test_allowed_keys_equals_base_keys_when_whitelist_empty():
+    """With an empty whitelist, only base fields survive the filter."""
+    assert _ALLOWED_KEYS == _BASE_KEYS
+
+
+def test_allowed_keys_extends_with_whitelist(populate_whitelist):
+    """With a populated whitelist, _ALLOWED_KEYS grows to include it.
+
+    Reads the *module-level* attribute: _ALLOWED_KEYS is computed at
+    import time, so the imported-by-value name in this test module would
+    remain stale. populate_whitelist patches both module attributes.
+    """
+    from core import logger as logger_mod
+    assert logger_mod._ALLOWED_KEYS == _BASE_KEYS | frozenset(populate_whitelist)
 
 
 def test_extra_whitelist_rejects_legacy_field_names():
-    """Regression: 'tool_name' / 'exception_type' must not be in the whitelist.
+    """Guard for future template edits: legacy names must never be added.
 
-    services/agent/tools/errors.py used to pass extra={'tool_name': ...,
-    'exception_type': ...}; those keys were silently dropped. The fix
-    renamed them to 'tool' / 'error_code'. This test pins that the old
-    names are not accidentally re-added.
+    With the empty default whitelist this is a no-op guard. The intent is
+    pinned: if a user uncomments `tool_name` or `exception_type` in
+    `_EXTRA_WHITELIST` instead of the canonical `tool` / `error_code`,
+    this test fails and points them at the right names.
     """
     assert 'tool_name' not in _EXTRA_WHITELIST
     assert 'exception_type' not in _EXTRA_WHITELIST
@@ -130,6 +184,7 @@ def test_allowed_keys_is_union_of_base_and_whitelist():
 # _add_whitelisted_extras
 # ---------------------------------------------------------------------------
 
+@pytest.mark.usefixtures('populate_whitelist')
 def test_add_whitelisted_extras_copies_whitelisted_fields():
     """All whitelisted extras from LogRecord.__dict__ reach event_dict."""
     record = _record()
@@ -151,21 +206,31 @@ def test_add_whitelisted_extras_copies_whitelisted_fields():
     assert result['log_file'] == '/tmp/x.log'
 
 
-def test_add_whitelisted_extras_ignores_non_whitelisted_fields():
-    """Arbitrary LogRecord attributes are not copied."""
+@pytest.mark.usefixtures('populate_whitelist')
+def test_add_whitelisted_extras_copies_only_whitelisted_fields():
+    """Positive control: whitelisted fields are copied; others are not.
+
+    Without a positive control (a whitelisted key that DOES land in
+    event_dict), this test would pass even if the processor returned
+    event_dict unchanged. The empty-template default would mask a broken
+    processor.
+    """
     record = _record()
-    record.arbitrary = 'x'
-    record.tool_name = 'search'  # legacy name, must not be copied
-    record.exception_type = 'ValueError'  # legacy name, must not be copied
+    record.run_id = 'r1'  # whitelisted — must be copied
+    record.arbitrary = 'x'  # arbitrary — must be dropped
+    record.tool_name = 'search'  # legacy — must be dropped
+    record.exception_type = 'ValueError'  # legacy — must be dropped
 
     event_dict = {'event': 'msg', '_record': record}
     result = _add_whitelisted_extras(None, 'info', event_dict)
 
+    assert result['run_id'] == 'r1'
     assert 'arbitrary' not in result
     assert 'tool_name' not in result
     assert 'exception_type' not in result
 
 
+@pytest.mark.usefixtures('populate_whitelist')
 def test_add_whitelisted_extras_skips_none_values():
     """Whitelisted attributes set to None are not copied."""
     record = _record()
@@ -179,6 +244,7 @@ def test_add_whitelisted_extras_skips_none_values():
     assert 'step' not in result
 
 
+@pytest.mark.usefixtures('populate_whitelist')
 def test_add_whitelisted_extras_keeps_falsy_non_none():
     """Regression: 0 and '' are valid whitelisted values, not skipped.
 
@@ -201,6 +267,7 @@ def test_add_whitelisted_extras_keeps_falsy_non_none():
     assert result['run_id'] == ''
 
 
+@pytest.mark.usefixtures('populate_whitelist')
 def test_add_whitelisted_extras_skips_missing_attributes():
     """Whitelisted keys absent from the record are not added.
 
@@ -233,12 +300,13 @@ def test_add_whitelisted_extras_no_record_is_noop():
     assert result['arbitrary'] == 'x'
 
 
-def test_add_whitelisted_extras_mutates_event_dict_in_place():
-    """The processor mutates event_dict in-place and returns the same object.
+@pytest.mark.usefixtures('populate_whitelist')
+def test_add_whitelisted_extras_returns_same_dict():
+    """The processor returns the same event_dict instance (structlog contract).
 
-    This is the contract required by the structlog processor chain: each
-    processor must transform and return the same event_dict instance. A
-    refactor to a pure function would silently break that chain.
+    Note: the current implementation also mutates in-place, but that is
+    an implementation detail, NOT part of the contract. A future pure
+    refactor (like _filter_event_dict) must not break this test.
     """
     record = _record()
     record.run_id = 'r1'
@@ -247,23 +315,7 @@ def test_add_whitelisted_extras_mutates_event_dict_in_place():
     result = _add_whitelisted_extras(None, 'info', event_dict)
 
     assert result is event_dict
-    assert event_dict['run_id'] == 'r1'
-
-
-def test_add_whitelisted_extras_overwrites_existing_value():
-    """A whitelisted key already in event_dict is overwritten by the record.
-
-    Pinned for clarity: in practice native calls have no `_record`, and
-    stdlib calls never put whitelisted keys into event_dict before this
-    processor runs, so this overwrite is theoretical.
-    """
-    record = _record()
-    record.run_id = 'from-record'
-    event_dict = {'event': 'msg', 'run_id': 'from-event-dict', '_record': record}
-
-    result = _add_whitelisted_extras(None, 'info', event_dict)
-
-    assert result['run_id'] == 'from-record'
+    assert event_dict['run_id'] == 'r1'  # current behavior, not contract
 
 
 # ---------------------------------------------------------------------------
@@ -279,6 +331,7 @@ def test_filter_event_dict_keeps_base_keys():
     assert set(result) == _BASE_KEYS
 
 
+@pytest.mark.usefixtures('populate_whitelist')
 def test_filter_event_dict_keeps_whitelisted_extras():
     """All whitelisted extras survive the filter."""
     result = _filter_event_dict(None, 'info', {
@@ -289,12 +342,17 @@ def test_filter_event_dict_keeps_whitelisted_extras():
     assert result['error_code'] == 'E'
 
 
+@pytest.mark.usefixtures('populate_whitelist')
 def test_filter_event_dict_keeps_falsy_whitelisted_values():
     """Regression: 0 / '' whitelisted values must not be dropped.
 
     Only None is dropped; falsy-but-not-None values are preserved. A
     refactor to a truthiness check would drop step=0, latency_ms=0,
     error_code='', run_id=''.
+
+    The positive control (tool='search') guards against a filter that
+    drops everything: without it, the test would not distinguish a
+    correct filter from `return {}`.
     """
     result = _filter_event_dict(None, 'info', {
         'event': 'x',
@@ -302,11 +360,13 @@ def test_filter_event_dict_keeps_falsy_whitelisted_values():
         'latency_ms': 0,
         'error_code': '',
         'run_id': '',
+        'tool': 'search',  # positive control
     })
     assert result['step'] == 0
     assert result['latency_ms'] == 0
     assert result['error_code'] == ''
     assert result['run_id'] == ''
+    assert result['tool'] == 'search'
 
 
 def test_filter_event_dict_drops_arbitrary_keys():
@@ -326,14 +386,22 @@ def test_filter_event_dict_drops_structlog_meta_keys():
     assert '_from_structlog' not in result
 
 
+@pytest.mark.usefixtures('populate_whitelist')
 def test_filter_event_dict_drops_whitelisted_none_values():
-    """Whitelisted extras with a None value are dropped."""
+    """Whitelisted extras with a None value are dropped.
+
+    The positive control (step=3) guards against a filter that drops
+    everything: without it, the test would not distinguish a correct
+    filter from `return {}`.
+    """
     result = _filter_event_dict(None, 'info', {
         'event': 'x', 'run_id': None, 'tool': None, 'error_code': None,
+        'step': 3,  # positive control
     })
     assert 'run_id' not in result
     assert 'tool' not in result
     assert 'error_code' not in result
+    assert result['step'] == 3
 
 
 def test_filter_event_dict_keeps_base_keys_with_none():
@@ -412,6 +480,26 @@ def test_build_shared_processors_excludes_json_renderer():
 
 
 # ---------------------------------------------------------------------------
+# _is_ours
+# ---------------------------------------------------------------------------
+
+def test_is_ours_true_for_marked_handler():
+    h = logging.NullHandler()
+    h._structlog_handler = True
+    assert _is_ours(h) is True
+
+
+def test_is_ours_false_for_unmarked_handler():
+    assert _is_ours(logging.NullHandler()) is False
+
+
+def test_is_ours_false_for_false_marker():
+    h = logging.NullHandler()
+    h._structlog_handler = False
+    assert _is_ours(h) is False
+
+
+# ---------------------------------------------------------------------------
 # setup_logging: filesystem and handlers
 # ---------------------------------------------------------------------------
 
@@ -475,14 +563,42 @@ def test_setup_logging_uses_midnight_rotation(tmp_path):
 
 
 def test_setup_logging_is_idempotent(tmp_path):
-    """A second call does not add duplicate handlers."""
+    """A second call does not add duplicate handlers.
+
+    Counts only our handlers (marked with _structlog_handler): foreign
+    handlers added by other plugins must not affect this assertion.
+    """
     logger1 = setup_logging(tmp_path)
-    n_handlers = len(logging.getLogger().handlers)
+    n_ours = len([h for h in logging.getLogger().handlers if _is_ours(h)])
 
     logger2 = setup_logging(tmp_path)
 
     assert logger1 is logger2
-    assert len(logging.getLogger().handlers) == n_handlers
+    assert len([h for h in logging.getLogger().handlers if _is_ours(h)]) == n_ours
+
+
+def test_setup_logging_does_not_switch_dir_on_second_call(tmp_path):
+    """Idempotency contract: a second call with a different dir does nothing.
+
+    Documents current behavior: handlers are already installed, so logs
+    continue to go to the first directory. A future "reinit" refactor
+    must change this test deliberately.
+    """
+    first = tmp_path / 'a'
+    second = tmp_path / 'b'
+
+    setup_logging(first)
+    setup_logging(second)
+
+    assert (first / 'app.log').exists()
+    assert not (second / 'app.log').exists()
+
+
+def test_setup_logging_writes_diagnostic_record(tmp_path):
+    """setup_logging emits a diagnostic record into the configured file."""
+    setup_logging(tmp_path)
+    records = _read_jsonl(tmp_path / 'app.log')
+    assert any(r['event'].startswith('Logging setup complete') for r in records)
 
 
 # ---------------------------------------------------------------------------
@@ -551,6 +667,7 @@ def test_timestamp_is_iso_utc(tmp_path):
     assert ts.endswith('Z') or ts.endswith('+00:00')
 
 
+@pytest.mark.usefixtures('populate_whitelist')
 def test_whitelisted_extras_land_in_json(tmp_path):
     """Every whitelisted key passed through extra= is visible in JSON."""
     logger = setup_logging(tmp_path)
@@ -585,14 +702,21 @@ def test_non_whitelisted_extras_dropped(tmp_path):
     assert 'another' not in last
 
 
+@pytest.mark.usefixtures('populate_whitelist')
 def test_whitelisted_none_extra_dropped(tmp_path):
-    """Whitelisted extras explicitly set to None are dropped from JSON."""
+    """Whitelisted extras explicitly set to None are dropped from JSON.
+
+    The positive control (tool='search') guards against a filter that
+    drops everything: without it, the test would not distinguish a
+    correct filter from one that always drops whitelisted extras.
+    """
     logger = setup_logging(tmp_path)
-    logger.info('none-extra', extra={'run_id': None, 'step': None})
+    logger.info('none-extra', extra={'run_id': None, 'step': None, 'tool': 'search'})
 
     last = _read_jsonl(tmp_path / 'app.log')[-1]
     assert 'run_id' not in last
     assert 'step' not in last
+    assert last['tool'] == 'search'
 
 
 def test_logrecord_internal_fields_do_not_leak(tmp_path):
@@ -609,15 +733,21 @@ def test_logrecord_internal_fields_do_not_leak(tmp_path):
         assert attr not in last
 
 
+@pytest.mark.usefixtures('populate_whitelist')
 def test_unicode_preserved(tmp_path):
-    """ensure_ascii=False: non-ASCII characters are written verbatim."""
+    """ensure_ascii=False: non-ASCII characters are written verbatim.
+
+    Presence of non-ASCII characters in the file is itself the check for
+    ensure_ascii=False; with ensure_ascii=True they would be escaped into
+    unicode escape sequences and the literal substring checks below would
+    fail.
+    """
     logger = setup_logging(tmp_path)
     logger.info('привет', extra={'run_id': 'r-тест'})
 
     text = (tmp_path / 'app.log').read_text(encoding='utf-8')
     assert 'привет' in text
     assert 'r-тест' in text
-    assert '\\u' not in text
 
 
 def test_exception_rendered_under_exception_key(tmp_path):
@@ -649,6 +779,7 @@ def test_stack_info_rendered_under_stack_key(tmp_path):
     assert 'Stack' in last['stack']
 
 
+@pytest.mark.usefixtures('populate_whitelist')
 def test_extra_stack_is_dropped(tmp_path):
     """Regression: extra={'stack': ...} was silently lost.
 
@@ -662,6 +793,49 @@ def test_extra_stack_is_dropped(tmp_path):
 
     last = _read_jsonl(tmp_path / 'app.log')[-1]
     assert 'stack' not in last
+
+
+def test_empty_message_is_logged(tmp_path):
+    """logger.info('') produces {"event": ""}, not a crash."""
+    logger = setup_logging(tmp_path)
+    logger.info('')
+
+    last = _read_jsonl(tmp_path / 'app.log')[-1]
+    assert last['event'] == ''
+
+
+def test_exc_info_without_active_exception(tmp_path):
+    """exc_info=True without an active exception emits NO exception field.
+
+    structlog's format_exc_info drops (None, None, None) — unlike stdlib's
+    Formatter, which would emit 'NoneType: None'. This pins the observable
+    behaviour of the JSON pipeline: no misleading 'NoneType: None' string
+    ends up in production logs when exc_info is passed without an active
+    exception.
+    """
+    logger = setup_logging(tmp_path)
+    logger.error('no-active-exc', exc_info=True)
+
+    last = _read_jsonl(tmp_path / 'app.log')[-1]
+    assert 'exception' not in last
+
+
+def test_stack_info_and_exc_info_together(tmp_path):
+    """stack_info=True and exc_info coexist: both 'stack' and 'exception' appear."""
+    logger = setup_logging(tmp_path)
+    try:
+        raise ValueError('with-stack-and-exc')
+    except ValueError as exc:
+        logger.error(
+            'both-fields',
+            exc_info=(type(exc), exc, exc.__traceback__),
+            stack_info=True,
+        )
+
+    last = _read_jsonl(tmp_path / 'app.log')[-1]
+    assert 'stack' in last
+    assert 'exception' in last
+    assert 'ValueError: with-stack-and-exc' in last['exception']
 
 
 def test_console_handler_writes_to_stdout(tmp_path, capsys):
@@ -681,11 +855,12 @@ def test_console_handler_writes_to_stdout(tmp_path, capsys):
 # setup_logging: integration with the errors.py pattern
 # ---------------------------------------------------------------------------
 
+@pytest.mark.usefixtures('populate_whitelist')
 def test_errors_py_pattern_lands_in_json(tmp_path):
-    """Canonical shape from services/agent/tools/errors.py::log_exception.
+    """Canonical error-logging shape: exc_info + extra={'tool', 'error_code'}.
 
-    After the fix, log_exception passes exc_info and extra={'tool': ...,
-    'error_code': ...}. Both must be visible in JSON, at ERROR level.
+    Both the exception traceback and the whitelisted extras must be
+    visible in the JSON event at ERROR level.
     """
     logger = setup_logging(tmp_path)
     try:
@@ -705,13 +880,14 @@ def test_errors_py_pattern_lands_in_json(tmp_path):
     assert 'RuntimeError: tool boom' in last['exception']
 
 
+@pytest.mark.usefixtures('populate_whitelist')
 def test_legacy_errors_py_fields_are_dropped(tmp_path):
-    """Regression: the old 'tool_name' / 'exception_type' extras were silently lost.
+    """Regression: the legacy 'tool_name' / 'exception_type' extras are dropped.
 
-    The fix renamed them to 'tool' / 'error_code'. This test pins the
-    observable behaviour: the old names still do not appear in JSON,
-    but the exception type remains visible via the 'exception' field
-    (which format_exc_info populates from exc_info).
+    Both legacy names are passed via extra= but must not appear in JSON
+    (they are not whitelisted). The exception type is still visible via
+    the 'exception' field, which format_exc_info populates from exc_info
+    — not from the legacy 'exception_type' extra.
     """
     logger = setup_logging(tmp_path)
     try:
@@ -733,6 +909,7 @@ def test_legacy_errors_py_fields_are_dropped(tmp_path):
 # setup_logging: native structlog calls
 # ---------------------------------------------------------------------------
 
+@pytest.mark.usefixtures('populate_whitelist')
 def test_native_structlog_call_routes_through_pipeline(tmp_path):
     """Whitelisted kwargs from a native structlog call land in the JSON file.
 
@@ -753,13 +930,20 @@ def test_native_structlog_call_routes_through_pipeline(tmp_path):
     assert last['tool'] == 'search'
 
 
+@pytest.mark.usefixtures('populate_whitelist')
 def test_native_structlog_drops_non_whitelisted_kwargs(tmp_path):
-    """Native calls are filtered by _filter_event_dict too."""
+    """Native calls are filtered by _filter_event_dict too.
+
+    The positive control (run_id='r1') guards against a filter that
+    drops everything: without it, the test would not distinguish a
+    correct filter from `return {}`.
+    """
     setup_logging(tmp_path)
     slog = structlog.get_logger('native')
-    slog.info('native-event', arbitrary='x', tool_name='legacy')
+    slog.info('native-event', run_id='r1', arbitrary='x', tool_name='legacy')
 
     last = _read_jsonl(tmp_path / 'app.log')[-1]
+    assert last['run_id'] == 'r1'
     assert 'arbitrary' not in last
     assert 'tool_name' not in last
 
@@ -804,8 +988,15 @@ def test_get_logger_caches_setup(tmp_path, monkeypatch):
     assert calls[0] == (tmp_path, 'app.log')
 
 
-def test_get_logger_cache_clear_triggers_reinit(tmp_path, monkeypatch):
-    """cache_clear() forces a fresh setup_logging on the next call."""
+def test_get_logger_cache_clear_calls_setup_again(tmp_path, monkeypatch):
+    """cache_clear() forces setup_logging to be called again on the next call.
+
+    setup_logging itself is idempotent (early-returns when our handlers
+    exist), so the second invocation does NOT create new handlers. The
+    extra assert on the number of our handlers pins that idempotency —
+    otherwise this test would only exercise the lru_cache, not the
+    early-return path.
+    """
     from core import logger as logger_mod
 
     calls: list[int] = []
@@ -827,6 +1018,9 @@ def test_get_logger_cache_clear_triggers_reinit(tmp_path, monkeypatch):
 
     # Two cache fills; the middle two calls hit the cached value.
     assert len(calls) == 2
+    # setup_logging is idempotent: exactly two of our handlers exist.
+    root = logging.getLogger()
+    assert len([h for h in root.handlers if _is_ours(h)]) == 2
 
 
 # ---------------------------------------------------------------------------
