@@ -10,6 +10,7 @@ from core.logger import (
     _ALLOWED_KEYS,
     _BASE_KEYS,
     _EXTRA_WHITELIST,
+    _INTERNAL_KEYS,
     _add_whitelisted_extras,
     _build_shared_processors,
     _filter_event_dict,
@@ -98,13 +99,17 @@ def last_record(tmp_path):
 def populate_whitelist(monkeypatch):
     """Temporarily populate the whitelist to exercise the projection mechanism.
 
-    The template ships with an empty whitelist (see test_whitelist_is_empty_by_default).
+    The template ships with an empty user whitelist (see test_whitelist_is_empty_by_default).
     To test _add_whitelisted_extras / _filter_event_dict / end-to-end extra= handling,
-    we monkeypatch both _EXTRA_WHITELIST and _ALLOWED_KEYS together.
+    we monkeypatch _EXTRA_WHITELIST and _ALLOWED_KEYS.
 
-    _ALLOWED_KEYS must be patched explicitly because it is computed at import
-    time (frozenset union), so patching only _EXTRA_WHITELIST would leave
-    _filter_event_dict with a stale allowed set.
+    The processors read _INTERNAL_KEYS and _EXTRA_WHITELIST at call time via
+    (*_INTERNAL_KEYS, *_EXTRA_WHITELIST), so patching _EXTRA_WHITELIST here is
+    picked up dynamically. _ALLOWED_KEYS is a frozenset computed at import
+    time, so it must be patched explicitly — and it must mirror the production
+    formula (_BASE_KEYS | _INTERNAL_KEYS | _EXTRA_WHITELIST), not a subset:
+    patching only _BASE_KEYS | canonical would stop exercising the internal
+    keys once _INTERNAL_KEYS grows beyond error_code.
 
     Dependency on clean_logging (autouse): this fixture only affects the
     *module-level* attributes read at call time by the processors. If
@@ -122,7 +127,9 @@ def populate_whitelist(monkeypatch):
     monkeypatch.setattr(
         logger_mod,
         '_ALLOWED_KEYS',
-        logger_mod._BASE_KEYS | frozenset(canonical),
+        logger_mod._BASE_KEYS
+        | frozenset(logger_mod._INTERNAL_KEYS)
+        | frozenset(canonical),
     )
     return canonical
 
@@ -132,18 +139,27 @@ def populate_whitelist(monkeypatch):
 # ---------------------------------------------------------------------------
 
 def test_whitelist_is_empty_by_default():
-    """The template ships with an empty whitelist: extra= fields are dropped.
+    """The template ships with an empty user whitelist: extra= fields are dropped.
 
     Users uncomment keys in core/logger.py::_EXTRA_WHITELIST to enable
     projection of specific extras into JSON. The empty default is the
     safe template contract — no accidental SecretStr / large payload leak.
+
+    Note: _INTERNAL_KEYS (error_code) is projected unconditionally and is
+    NOT part of this user-configurable whitelist — see
+    test_allowed_keys_extends_base_keys_with_internal_keys.
     """
     assert _EXTRA_WHITELIST == ()
 
 
-def test_allowed_keys_equals_base_keys_when_whitelist_empty():
-    """With an empty whitelist, only base fields survive the filter."""
-    assert _ALLOWED_KEYS == _BASE_KEYS
+def test_allowed_keys_extends_base_keys_with_internal_keys():
+    """With an empty user whitelist, base fields and internal keys survive.
+
+    _INTERNAL_KEYS (currently just error_code) is projected unconditionally
+    because the shipped ErrorHandler relies on it. The user-editable
+    whitelist stays empty — see test_whitelist_is_empty_by_default.
+    """
+    assert _ALLOWED_KEYS == _BASE_KEYS | frozenset(_INTERNAL_KEYS)
 
 
 def test_allowed_keys_extends_with_whitelist(populate_whitelist):
@@ -151,10 +167,14 @@ def test_allowed_keys_extends_with_whitelist(populate_whitelist):
 
     Reads the *module-level* attribute: _ALLOWED_KEYS is computed at
     import time, so the imported-by-value name in this test module would
-    remain stale. populate_whitelist patches both module attributes.
+    remain stale. populate_whitelist patches both module attributes, and
+    the assertion uses the full production formula (base | internal |
+    user whitelist) so that internal keys are accounted for explicitly.
     """
     from core import logger as logger_mod
-    assert logger_mod._ALLOWED_KEYS == _BASE_KEYS | frozenset(populate_whitelist)
+    assert logger_mod._ALLOWED_KEYS == (
+            _BASE_KEYS | frozenset(_INTERNAL_KEYS) | frozenset(populate_whitelist)
+    )
 
 
 def test_extra_whitelist_rejects_legacy_field_names():
@@ -176,8 +196,13 @@ def test_base_keys_contents():
     }
 
 
-def test_allowed_keys_is_union_of_base_and_whitelist():
-    assert _ALLOWED_KEYS == _BASE_KEYS | frozenset(_EXTRA_WHITELIST)
+def test_internal_keys_contents():
+    """Internal keys currently only cover what the shipped ErrorHandler uses."""
+    assert _INTERNAL_KEYS == ('error_code',)
+
+
+def test_allowed_keys_is_union_of_base_internal_and_whitelist():
+    assert _ALLOWED_KEYS == _BASE_KEYS | frozenset(_INTERNAL_KEYS) | frozenset(_EXTRA_WHITELIST)
 
 
 # ---------------------------------------------------------------------------
@@ -208,9 +233,9 @@ def test_add_whitelisted_extras_copies_whitelisted_fields():
 
 @pytest.mark.usefixtures('populate_whitelist')
 def test_add_whitelisted_extras_copies_only_whitelisted_fields():
-    """Positive control: whitelisted fields are copied; others are not.
+    """Positive control: projected fields (_INTERNAL_KEYS + whitelist) are copied; others are not.
 
-    Without a positive control (a whitelisted key that DOES land in
+    Without a positive control (a projected key that DOES land in
     event_dict), this test would pass even if the processor returned
     event_dict unchanged. The empty-template default would mask a broken
     processor.
@@ -291,6 +316,25 @@ def test_add_whitelisted_extras_skips_missing_attributes():
         assert missing not in result
 
 
+def test_add_whitelisted_extras_copies_internal_keys_with_empty_user_whitelist():
+    """Regression: internal keys are projected even when the user whitelist is empty.
+
+    Uses the *shipped* configuration (no populate_whitelist): _INTERNAL_KEYS
+    must be copied regardless of _EXTRA_WHITELIST. The shipped ErrorHandler
+    relies on error_code, and that contract must not depend on whether the
+    user uncommented any example keys.
+    """
+    record = _record()
+    record.error_code = 'unhandled_exception'
+    record.run_id = 'r1'  # not whitelisted by default
+
+    event_dict = {'event': 'msg', '_record': record}
+    result = _add_whitelisted_extras(None, 'info', event_dict)
+
+    assert result['error_code'] == 'unhandled_exception'
+    assert 'run_id' not in result
+
+
 def test_add_whitelisted_extras_no_record_is_noop():
     """Native structlog calls have no `_record`; the processor is a no-op."""
     event_dict = {'event': 'msg', 'arbitrary': 'x'}
@@ -340,6 +384,20 @@ def test_filter_event_dict_keeps_whitelisted_extras():
     assert result['run_id'] == 'r1'
     assert result['tool'] == 't'
     assert result['error_code'] == 'E'
+
+
+def test_filter_event_dict_keeps_internal_keys_with_empty_user_whitelist():
+    """Regression: error_code survives the filter with the shipped config.
+
+    The negative control ('arbitrary' is dropped) guards against a filter
+    that returns every input key unchanged: without it, a pass-through
+    regression (`return dict(event_dict)`) would still pass this test.
+    """
+    result = _filter_event_dict(None, 'info', {
+        'event': 'x', 'error_code': 'value_error', 'arbitrary': 'y',
+    })
+    assert result['error_code'] == 'value_error'
+    assert 'arbitrary' not in result
 
 
 @pytest.mark.usefixtures('populate_whitelist')
@@ -402,6 +460,16 @@ def test_filter_event_dict_drops_whitelisted_none_values():
     assert 'tool' not in result
     assert 'error_code' not in result
     assert result['step'] == 3
+
+
+def test_filter_event_dict_drops_internal_none_values():
+    """Regression: internal keys with None are dropped even without user whitelist."""
+    result = _filter_event_dict(None, 'info', {
+        'event': 'x', 'error_code': None,
+        'stack': 'st',  # positive control: base key with a real value
+    })
+    assert 'error_code' not in result
+    assert result['stack'] == 'st'
 
 
 def test_filter_event_dict_keeps_base_keys_with_none():
@@ -692,6 +760,22 @@ def test_whitelisted_extras_land_in_json(tmp_path):
     assert last['log_file'] == '/tmp/custom.log'
 
 
+def test_error_code_lands_in_json_with_default_whitelist(tmp_path):
+    """Regression: error_code reaches JSON with the shipped whitelist.
+
+    No populate_whitelist fixture: this pins the shipped contract that
+    _INTERNAL_KEYS is projected unconditionally. Before the fix,
+    _add_whitelisted_extras iterated only over _EXTRA_WHITELIST and
+    silently dropped error_code.
+    """
+    logger = setup_logging(tmp_path)
+    logger.warning('value-error', extra={'error_code': 'value_error'})
+
+    last = _read_jsonl(tmp_path / 'app.log')[-1]
+    assert last['error_code'] == 'value_error'
+    assert last['level'] == 'warning'
+
+
 def test_non_whitelisted_extras_dropped(tmp_path):
     """Arbitrary extra= keys are silently filtered out."""
     logger = setup_logging(tmp_path)
@@ -785,8 +869,9 @@ def test_extra_stack_is_dropped(tmp_path):
 
     'stack' is in _BASE_KEYS, so _filter_event_dict would pass it through
     unchanged. It is dropped earlier — by _add_whitelisted_extras, which
-    only copies keys from _EXTRA_WHITELIST and 'stack' is not in that set.
-    Hence the drop is a consequence of the earlier stage, not the filter.
+    only copies keys from _INTERNAL_KEYS + _EXTRA_WHITELIST and 'stack' is
+    not in either set. Hence the drop is a consequence of the earlier
+    stage, not the filter.
     """
     logger = setup_logging(tmp_path)
     logger.info('legacy-stack', extra={'stack': ['frame1', 'frame2']})
@@ -946,6 +1031,20 @@ def test_native_structlog_drops_non_whitelisted_kwargs(tmp_path):
     assert last['run_id'] == 'r1'
     assert 'arbitrary' not in last
     assert 'tool_name' not in last
+
+
+def test_native_structlog_keeps_internal_keys_with_default_whitelist(tmp_path):
+    """Regression: native structlog calls also project internal keys.
+
+    Uses the shipped configuration: error_code passed as a kwarg (not via
+    extra=) must survive _filter_event_dict thanks to _INTERNAL_KEYS.
+    """
+    setup_logging(tmp_path)
+    slog = structlog.get_logger('native')
+    slog.error('native-err', error_code='unhandled_exception')
+
+    last = _read_jsonl(tmp_path / 'app.log')[-1]
+    assert last['error_code'] == 'unhandled_exception'
 
 
 # ---------------------------------------------------------------------------
