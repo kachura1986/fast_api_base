@@ -40,7 +40,7 @@ class PipelineDependencies:
 #                 openai_client=openai_client,
 #             )
 #
-#         except BaseException:
+#         except Exception:
 #             logger.exception("Failed to initialize pipeline dependencies")
 #
 #             if openai_client is not None:
