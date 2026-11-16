@@ -39,16 +39,10 @@ _ALLOWED_KEYS = _BASE_KEYS | frozenset(_INTERNAL_KEYS) | frozenset(_EXTRA_WHITEL
 
 def _add_whitelisted_extras(_logger: Any, _method_name: str, event_dict: EventDict) -> EventDict:
     """
-    Copies whitelisted fields from LogRecord.__dict__ into event_dict.
+    Copy whitelisted LogRecord fields into event_dict.
 
-    Needed for stdlib logs issued with extra=... such as: logging.getLogger(...).info('...', extra={'run_id': ...})
-
-    For native structlog calls there is no _record, so this is a no-op;
-    the final _filter_event_dict still enforces the whitelist.
-
-    Projected keys are _INTERNAL_KEYS plus the user-editable _EXTRA_WHITELIST. The internal keys are copied
-    unconditionally: the shipped ErrorHandler relies on error_code, and that contract must not depend on whether the
-    user whitelist is empty.
+    _INTERNAL_KEYS are copied unconditionally: the shipped ErrorHandler relies on error_code, and that
+    contract must not depend on whether the user whitelist is empty.
 
     Args:
         _logger (Any): structlog logger (unused).
@@ -72,16 +66,9 @@ def _add_whitelisted_extras(_logger: Any, _method_name: str, event_dict: EventDi
 
 def _filter_event_dict(_logger: Any, _method_name: str, event_dict: EventDict) -> EventDict:
     """
-    Returns a new event_dict containing only allowed keys.
+    Return a new event_dict with only allowed keys and non-None projected fields.
 
-    Pure function: does not mutate the input, which is safer if context_class
-    is ever changed from dict to an ordered/custom mapping.
-
-    Drops:
-        * internal LogRecord attributes (args, exc_info, msg, ...);
-        * structlog meta keys (_record, _from_structlog);
-        * arbitrary extra fields (e.g. SecretStr, large payloads);
-        * projected fields (internal keys + user whitelist) whose value is None.
+    Pure function: does not mutate the input, which is safer if context_class is ever changed from dict.
 
     Args:
         _logger: structlog logger (unused).
@@ -101,10 +88,10 @@ def _filter_event_dict(_logger: Any, _method_name: str, event_dict: EventDict) -
 
 def _build_shared_processors() -> list[Processor]:
     """
-    Builds the processor chain shared by foreign stdlib logs.
+    Build the processor chain shared by foreign stdlib logs.
 
-    The final JSONRenderer is intentionally excluded here: rendering is done
-    exactly once, inside ProcessorFormatter.processors.
+    The final JSONRenderer is intentionally excluded here: rendering is done exactly once, inside
+    ProcessorFormatter.processors.
 
     Returns:
         list[Processor]: Ordered list of pre-render processors.
@@ -124,9 +111,8 @@ def _is_ours(handler: logging.Handler) -> bool:
     """
     Return True if the handler was installed by setup_logging.
 
-    Foreign handlers (pytest plugins, host applications, etc.) must not
-    prevent our handlers from being installed, and must not be treated
-    as evidence that setup already ran.
+    Foreign handlers (pytest plugins, host applications) must not prevent our handlers from being installed,
+    and must not be treated as evidence that setup already ran.
 
     Args:
         handler (logging.Handler): Any logging handler attached to root.
@@ -139,23 +125,14 @@ def _is_ours(handler: logging.Handler) -> bool:
 
 def setup_logging(logs_dir: Path, log_filename: str = 'app.log') -> logging.Logger:
     """
-    Configures structured JSON logging for the application.
+    Configure structured JSON logging to a rotating file and the console.
 
-    Logs are written to both a file and the console, with log rotation every midnight.
-    The "logs" directory is automatically created if it doesn't exist. Older logs are kept for 7 days.
+    Fields passed via extra=... are projected onto the JSON event when their names are in the whitelist:
+    run_id, step, tool, latency_ms, log_file. error_code is an internal key, always projected and not
+    configurable.
 
-    Fields passed via extra=... are projected onto the JSON event when their
-    names are in the whitelist: run_id, step, tool, error_code, latency_ms, log_file.
-
-    Foreign handlers already attached to the root logger (e.g. pytest plugins,
-    embedding applications) are left untouched: setup_logging only appends its
-    own file and console handlers. Idempotency is defined as "our handlers are
-    present", not "root has no handlers".
-
-    logger.setLevel(INFO) and the noisy-logger quieting are applied when our
-    handlers are installed. A second call early-returns, so they are not
-    re-applied — that is deliberate: our handlers already exist, and the
-    loggers are already quieted.
+    Foreign handlers already attached to the root logger are left untouched: idempotency is defined as
+    "our handlers are present", not "root has no handlers".
 
     Args:
         logs_dir (Path): Directory where logs will be stored.
