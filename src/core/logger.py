@@ -1,15 +1,12 @@
 import logging
 import os
 import sys
-from functools import lru_cache
 from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
 from typing import Any
 
 import structlog
 from structlog.types import EventDict, Processor
-
-from core.config import settings
 
 # Base JSON event fields (never dropped)
 _BASE_KEYS: frozenset[str] = frozenset({
@@ -26,12 +23,12 @@ _INTERNAL_KEYS: tuple[str, ...] = ('error_code',)
 
 # Fields allowed to pass through extra=... into JSON
 _EXTRA_WHITELIST: tuple[str, ...] = (
+    'log_file',
     # Example
     # 'run_id',
     # 'step',
     # 'tool',
     # 'latency_ms',
-    # 'log_file',
 )
 
 _ALLOWED_KEYS = _BASE_KEYS | frozenset(_INTERNAL_KEYS) | frozenset(_EXTRA_WHITELIST)
@@ -127,9 +124,8 @@ def setup_logging(logs_dir: Path, log_filename: str = 'app.log') -> logging.Logg
     """
     Configure structured JSON logging to a rotating file and the console.
 
-    Fields passed via extra=... are projected onto the JSON event when their names are in the whitelist:
-    run_id, step, tool, latency_ms, log_file. error_code is an internal key, always projected and not
-    configurable.
+    Fields passed via extra=... are projected onto the JSON event when their names are in the whitelist
+    (by default: log_file). error_code is an internal key, always projected and not configurable.
 
     Foreign handlers already attached to the root logger are left untouched: idempotency is defined as
     "our handlers are present", not "root has no handlers".
@@ -215,8 +211,3 @@ def setup_logging(logs_dir: Path, log_filename: str = 'app.log') -> logging.Logg
     )
 
     return logger
-
-
-@lru_cache(maxsize=1)
-def get_logger() -> logging.Logger:
-    return setup_logging(settings.LOGS_DIR, 'app.log')

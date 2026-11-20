@@ -18,13 +18,17 @@ class PipelineDependencies:
 
 
 # Example
+# import logging
+#
+# logger = logging.getLogger(__name__)
+#
+#
 # @dataclass
 # class PipelineDependencies:
 #     openai_client: AsyncAzureOpenAI
 #
 #     @classmethod
 #     async def create(cls) -> "PipelineDependencies":
-#         logger = get_logger()
 #         openai_client = None
 #
 #         try:
@@ -52,8 +56,6 @@ class PipelineDependencies:
 #             raise
 #
 #     async def close(self) -> None:
-#         logger = get_logger()
-#
 #         for name, resource in (
 #                 ("Azure OpenAI client", self.openai_client),
 #         ):

@@ -7,11 +7,11 @@ from fastapi import FastAPI
 from api.router import main_router
 from core.config import settings
 from core.error_handler import ErrorHandler
-from core.logger import get_logger
+from core.logger import setup_logging
 from dependencies import PipelineDependencies
 
 # Set up logging handlers before first log record
-get_logger()
+setup_logging(settings.LOGS_DIR)
 
 logger = logging.getLogger(__name__)
 
